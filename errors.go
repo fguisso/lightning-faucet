@@ -27,11 +27,11 @@ const (
 	ChanAmountNotNumber
 
 	// ChannelTooLarge indicates that the amounts specified to fund the
-	// channel with is greater than maxChannelSize.
+	// channel with is greater than MaxChannelSize.
 	ChannelTooLarge
 
 	// ChannelTooSmall indicates that the channel size required is below
-	// minChannelSize.
+	// MinChannelSize.
 	ChannelTooSmall
 
 	// PushIncorrect indicates that the amount specified to push to the
@@ -92,7 +92,7 @@ func (c ChanCreationError) String() string {
 	case ChannelTooLarge:
 		return "Amount is too large"
 	case ChannelTooSmall:
-		return fmt.Sprintf("Minimum channel size is is %d DCR", minChannelSize)
+		return fmt.Sprintf("Minimum channel size is is %d DCR", MinChannelSize)
 	case PushIncorrect:
 		return "Initial Balance is incorrect"
 	case ChannelOpenFail:
@@ -110,7 +110,7 @@ func (c ChanCreationError) String() string {
 	case PaymentStreamError:
 		return "Error on payment request, try again"
 	case ErrorPaymentAmount:
-		return fmt.Sprintf("The amount of invoice exceeds the limit of %d Atoms", maxPaymentAtoms)
+		return fmt.Sprintf("The amount of invoice exceeds the limit of %d Atoms", MaxPaymentAtoms)
 	case TimeLimitError:
 		return "Action time limited. Please wait."
 	case InternalServerError:

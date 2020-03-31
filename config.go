@@ -24,6 +24,18 @@ const (
 	defaultWipeChannels     = false
 	defaultUseRealIP        = false
 	defaultActionsTimeLimit = time.Duration(30) * time.Second
+
+	// MaxChannelSize is the larget channel that the faucet will create to
+	// another peer.
+	MaxChannelSize int64 = (1 << 30)
+
+	// MinChannelSize is the smallest channel that the faucet will extend
+	// to a peer.
+	MinChannelSize int64 = 50000
+
+	// MaxPaymentAtoms is the larget payment amount in atoms that the faucet
+	// will pay to an invoice
+	MaxPaymentAtoms int64 = 1000
 )
 
 var (

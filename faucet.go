@@ -27,20 +27,6 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-const (
-	// maxChannelSize is the larget channel that the faucet will create to
-	// another peer.
-	maxChannelSize int64 = (1 << 30)
-
-	// minChannelSize is the smallest channel that the faucet will extend
-	// to a peer.
-	minChannelSize int64 = 50000
-
-	// maxPaymentAtoms is the larget payment amount in atoms that the faucet
-	// will pay to an invoice
-	maxPaymentAtoms int64 = 1000
-)
-
 var (
 	// GenerateInvoiceAction represents an action to generate invoice on post forms
 	GenerateInvoiceAction = "generateinvoice"
@@ -776,13 +762,13 @@ func (l *lightningFaucet) openChannel(homeTemplate *template.Template,
 	// size and push amt meet our constraints.
 	switch {
 	// The target channel can't be below the constant min channel size.
-	case chanSize < minChannelSize:
+	case chanSize < MinChannelSize:
 		homeState.SubmissionError = ChannelTooSmall
 		homeTemplate.Execute(w, homeState)
 		return
 
 	// The target channel can't be above the max channel size.
-	case chanSize > maxChannelSize:
+	case chanSize > MaxChannelSize:
 		homeState.SubmissionError = ChannelTooLarge
 		homeTemplate.Execute(w, homeState)
 		return
@@ -1002,7 +988,7 @@ func (l *lightningFaucet) payInvoice(homeTemplate *template.Template,
 	decodedAmount := decodedPayReq.GetNumAtoms()
 
 	// Verify invoice amount.
-	if decodedAmount > maxPaymentAtoms {
+	if decodedAmount > MaxPaymentAtoms {
 		log.Errorf("Max payout, pay_amount: %v", decodedAmount)
 		homeState.SubmissionError = ErrorPaymentAmount
 		homeTemplate.Execute(w, homeState)
