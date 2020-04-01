@@ -6,11 +6,11 @@
           <div class="col-md-8 col-12 px-0 px-lg-3 d-none d-md-block h-100">
             <div class="d-flex justify-content-center h-100">
               <div class="align-self-center">
-                {{if ne .NodeAddr ""}}
+                {{if ne .GlobalContext.NodeAddr ""}}
                   {{ .NodeAddr }}<br />
                 {{end}}
-                {{if ne .GitCommitHash ""}}
-                  Git Commit: dcrlnd @ #{{ .GitCommitHash }}
+                {{if ne .GlobalContext.GitCommitHash ""}}
+                  Git Commit: dcrlnd @ #{{ .GlobalContext.GitCommitHash }}
                 {{end}}
               </div>
             </div>

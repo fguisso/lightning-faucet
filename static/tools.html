@@ -2,7 +2,7 @@
 
 {{template "navbar" .}}
 
-{{ if not .DisablePayInvoices }}
+{{ if not .GlobalContext.DisablePayInvoices }}
 <div class="content mb-3 p-4">
   <h2>Pay Invoice</h2>
   <form id="payInvoiceForm" method="post" action="/tools?action={{ .PayInvoiceAction }}">
@@ -56,7 +56,7 @@
 </div>
 {{end}}
 
-{{ if not .DisableGenerateInvoices }}
+{{ if not .GlobalContext.DisableGenerateInvoices }}
 <div class="content mb-3 p-4">
   <h2>Generate Invoice</h2>
   <form id="generateInvoiceForm" method="post" action="/tools?action={{ .GenerateInvoiceAction }}">

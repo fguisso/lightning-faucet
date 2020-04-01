@@ -59,8 +59,7 @@ type lightningFaucet struct {
 	openChannels map[wire.OutPoint]time.Time
 	cfg          *config
 
-	//Network info
-	network string
+	globalContext *TemplateContext
 }
 
 // cleanAndExpandPath expands environment variables and leading ~ in the
@@ -140,6 +139,58 @@ func getRealIP(r *http.Request, useRealIP bool) (string, error) {
 	return host, nil
 }
 
+// fetchStaticInfo query basic information from dcrlnd node
+// and give this information read to use in template context.
+func fetchStaticInfo(lnd lnrpc.LightningClient, cfg *config) (*TemplateContext, error) {
+	// First query for the general information from the lnd node, this'll
+	// be used to populate the number of active channel as well as the
+	// identity of the node.
+	infoReq := &lnrpc.GetInfoRequest{}
+	nodeInfo, err := lnd.GetInfo(ctxb, infoReq)
+	if err != nil {
+		log.Errorf("rpc GetInfoRequest failed: %v", err)
+		return nil, err
+	}
+
+	// Get node uri
+	nodeAddr := ""
+	if len(nodeInfo.Uris) == 0 {
+		log.Warn("nodeInfo did not include a URI. external_ip config of dcrlnd is probably not set")
+	} else {
+		nodeAddr = nodeInfo.Uris[0]
+	}
+
+	// Parse the git commit used to build the node, assuming it was
+	// setting on the build.
+	gitHash := ""
+	if p := strings.LastIndex(nodeInfo.Version, "commit="); p > -1 && len(nodeInfo.Version)-p-7 >= 40 {
+		// Read the right-most 40 chars and assume it's the git hash.
+		gitHash = nodeInfo.Version[len(nodeInfo.Version)-40:]
+	}
+
+	// Get chain info to stop creation if the dcrlnd and dcrlnfaucet
+	// are set in different networks.
+	chain, err := getChainInfo(lnd)
+	if err != nil {
+		return nil, err
+	}
+	netParams := normalizeNetwork(activeNetParams.Name)
+	if chain.Network != netParams {
+		return nil, fmt.Errorf(
+			"dcrlnd and dcrlnfaucet are set in different "+
+				"networks <dcrlnd: %v / dcrlnfaucet: %v>",
+			chain.Network, netParams)
+	}
+
+	return &TemplateContext{
+		DisableGenerateInvoices: cfg.DisableGenerateInvoices,
+		DisablePayInvoices:      cfg.DisablePayInvoices,
+		NodeAddr:                nodeAddr,
+		GitCommitHash:           strings.Replace(gitHash, "'", "", -1),
+		Network:                 chain.Network,
+	}, nil
+}
+
 // getChainInfo makes a request to get information about dcrlnd chain.
 func getChainInfo(l lnrpc.LightningClient) (*lnrpc.Chain, error) {
 	infoReq := &lnrpc.GetInfoRequest{}
@@ -192,23 +243,28 @@ func newLightningFaucet(cfg *config,
 
 	// Get chain info to stop creation if the dcrlnd and dcrlnfaucet
 	// are set in different networks.
-	chain, err := getChainInfo(lnd)
+	globalCtx, err := fetchStaticInfo(lnd, cfg)
 	if err != nil {
-		return nil, err
-	}
-	netParams := normalizeNetwork(activeNetParams.Name)
-	if chain.Network != netParams {
-		return nil, fmt.Errorf(
-			"dcrlnd and dcrlnfaucet are set in different "+
-				"networks <dcrlnd: %v / dcrlnfaucet: %v>",
-			chain.Network, netParams)
+		return nil, fmt.Errorf("unable to get initial info: %v", err)
 	}
 
+	// chain, err := getChainInfo(lnd)
+	// if err != nil {
+	//		return nil, err
+	//	}
+	//	netParams := normalizeNetwork(activeNetParams.Name)
+	//	if chain.Network != netParams {
+	//		return nil, fmt.Errorf(
+	//			"dcrlnd and dcrlnfaucet are set in different "+
+	//				"networks <dcrlnd: %v / dcrlnfaucet: %v>",
+	//			chain.Network, netParams)
+	//	}
+
 	return &lightningFaucet{
-		lnd:       lnd,
-		templates: templates,
-		cfg:       cfg,
-		network:   chain.Network,
+		lnd:           lnd,
+		templates:     templates,
+		cfg:           cfg,
+		globalContext: globalCtx,
 	}, nil
 }
 
@@ -366,97 +422,13 @@ func (l *lightningFaucet) closeChannel(chanPoint *lnrpc.ChannelPoint,
 	return chainhash.NewHash(closingHash)
 }
 
-// homePageContext defines the initial context required for rendering home
-// page. The home page displays some basic statistics, errors in the case of an
-// invalid channel submission, and finally a splash page upon successful
-// creation of a channel.
-type homePageContext struct {
-	// NodeInfo is the response of lnrpc.GetInfo
-	NodeInfo *lnrpc.GetInfoResponse
-
-	// FaucetVersion is version of executable of lightning-faucet
-	FaucetVersion string
-
-	// FaucetCommit is the commit from the builing of lightning-faucet
-	FaucetCommit string
-	// NumCoins is the number of coins in Decred that the faucet has available
-	// for channel creation.
-	NumCoins float64
-
-	// GitCommitHash is the git HEAD's commit hash of
-	// $GOPATH/src/github.com/decred/dcrlnd
-	GitCommitHash string
-
-	// NodeAddr is the full <pubkey>@host:port where the faucet can be
-	// connect to.
-	NodeAddr string
-
-	// SubmissionError is a enum that stores if any error took place during
-	// the creation of a channel.
-	SubmissionError ChanCreationError
-
-	// ChannelTxid is the txid of the created funding channel. If this
-	// field is an empty string, then that indicates the channel hasn't yet
-	// been created.
-	ChannelTxid string
-
-	// NumConfs is the number of confirmations required for the channel to
-	// open up.
-	NumConfs uint32
-
-	// FormFields contains the values which were submitted through the form.
-	FormFields map[string]string
-
-	// PendingChannels contains all of this faucets pending channels.
-	PendingChannels []*lnrpc.PendingChannelsResponse_PendingOpenChannel
-
-	// ActiveChannels contains all of this faucets active channels.
-	ActiveChannels []*lnrpc.Channel
-
-	// InvoicePaymentRequest the payment request generated by an invoice.
-	InvoicePaymentRequest string
-
-	// PayInvoiceRequest the pay request for an invoice.
-	PayInvoiceRequest string
-
-	// PayInvoiceAction action
-	PayInvoiceAction string
-
-	// OpenChannelAction indicates the form action to open a channel
-	OpenChannelAction string
-
-	// GenerateInvoiceAction indicates the form action to generate a new Invoice
-	GenerateInvoiceAction string
-
-	// Disable generate invoices form
-	DisableGenerateInvoices bool
-
-	// Disable invoices payments form
-	DisablePayInvoices bool
-
-	// Payment infos
-	PaymentDestination string
-	PaymentDescription string
-	PaymentAmount      string
-	PaymentHash        string
-	PaymentPreimage    string
-	PaymentHops        []*lnrpc.Hop
-
-	// Network info
-	Network string
-}
-
-// fetchHomeState is helper functions that populates the homePageContext with
+// fetchHomeState is helper functions that populates the HomePageContext with
 // the latest state from the local lnd node.
-func (l *lightningFaucet) fetchHomeState() (*homePageContext, error) {
-	// First query for the general information from the lnd node, this'll
-	// be used to populate the number of active channel as well as the
-	// identity of the node.
-	infoReq := &lnrpc.GetInfoRequest{}
-	nodeInfo, err := l.lnd.GetInfo(ctxb, infoReq)
+func (l *lightningFaucet) fetchHomeState() (*HomePageContext, error) {
+	// Get dcrlnd node info
+	globalCtx, err := fetchStaticInfo(l.lnd, l.cfg)
 	if err != nil {
-		log.Errorf("rpc GetInfoRequest failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("unable to get initial info: %v", err)
 	}
 
 	activeChanReq := &lnrpc.ListChannelsRequest{}
@@ -482,38 +454,18 @@ func (l *lightningFaucet) fetchHomeState() (*homePageContext, error) {
 		return nil, err
 	}
 
-	// Parse the git commit used to build the node, assuming it was built
-	// with `make install`.
-	gitHash := ""
-	if p := strings.LastIndex(nodeInfo.Version, "commit="); p > -1 && len(nodeInfo.Version)-p-7 >= 40 {
-		// Read the right-most 40 chars and assume it's the git hash.
-		gitHash = nodeInfo.Version[len(nodeInfo.Version)-40:]
-	}
-
-	nodeAddr := ""
-	if len(nodeInfo.Uris) == 0 {
-		log.Warn("nodeInfo did not include a URI. external_ip config of dcrlnd is probably not set")
-	} else {
-		nodeAddr = nodeInfo.Uris[0]
-	}
-
-	return &homePageContext{
-		NodeInfo:                nodeInfo,
-		FaucetVersion:           Version(),
-		FaucetCommit:            SourceCommit(),
-		NumCoins:                dcrutil.Amount(walletBalance.ConfirmedBalance).ToCoin(),
-		GitCommitHash:           strings.Replace(gitHash, "'", "", -1),
-		NodeAddr:                nodeAddr,
-		NumConfs:                6,
-		FormFields:              make(map[string]string),
-		ActiveChannels:          activeChannels.Channels,
-		PendingChannels:         pendingChannels.PendingOpenChannels,
-		OpenChannelAction:       OpenChannelAction,
-		GenerateInvoiceAction:   GenerateInvoiceAction,
-		PayInvoiceAction:        PayInvoiceAction,
-		DisableGenerateInvoices: l.cfg.DisableGenerateInvoices,
-		DisablePayInvoices:      l.cfg.DisablePayInvoices,
-		Network:                 l.network,
+	return &HomePageContext{
+		FaucetVersion:         Version(),
+		FaucetCommit:          SourceCommit(),
+		NumCoins:              dcrutil.Amount(walletBalance.ConfirmedBalance).ToCoin(),
+		NumConfs:              6,
+		FormFields:            make(map[string]string),
+		ActiveChannels:        activeChannels.Channels,
+		PendingChannels:       pendingChannels.PendingOpenChannels,
+		OpenChannelAction:     OpenChannelAction,
+		GenerateInvoiceAction: GenerateInvoiceAction,
+		PayInvoiceAction:      PayInvoiceAction,
+		GlobalContext:         globalCtx,
 	}, nil
 }
 
@@ -559,8 +511,46 @@ func (l *lightningFaucet) faucetHome(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// infoPage renders the info page for the faucet. This includes all the information
-// about the faucet and the dcrlnd node.
+// fetchInfoState is helper functions that populates the InfoPageContext with
+// the latest state from the local dcrlnd node information.
+func (l *lightningFaucet) fetchInfoState() (*InfoPageContext, error) {
+	// Get node info
+	infoReq := &lnrpc.GetInfoRequest{}
+	nodeInfo, err := l.lnd.GetInfo(ctxb, infoReq)
+
+	// Get dcrlnd node info
+	globalCtx, err := fetchStaticInfo(l.lnd, l.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get initial info: %v", err)
+	}
+
+	// Query for active channels information from the dcrlnd node.
+	activeChanReq := &lnrpc.ListChannelsRequest{}
+	activeChannels, err := l.lnd.ListChannels(ctxb, activeChanReq)
+	if err != nil {
+		log.Errorf("rpc ListChannels failed: %v", err)
+		return nil, err
+	}
+
+	// Query for pending channels information from the dcrlnd node.
+	pendingChanReq := &lnrpc.PendingChannelsRequest{}
+	pendingChannels, err := l.lnd.PendingChannels(ctxb, pendingChanReq)
+	if err != nil {
+		log.Errorf("rpc PendingChannels failed: %v", err)
+		return nil, err
+	}
+
+	return &InfoPageContext{
+		FaucetVersion:   Version(),
+		FaucetCommit:    SourceCommit(),
+		NodeInfo:        nodeInfo,
+		PendingChannels: pendingChannels.PendingOpenChannels,
+		ActiveChannels:  activeChannels.Channels,
+		GlobalContext:   globalCtx,
+	}, nil
+}
+
+// infoPage render information pages
 //
 // NOTE: This method implements the http.Handler interface.
 func (l *lightningFaucet) infoPage(w http.ResponseWriter, r *http.Request) {
@@ -570,7 +560,7 @@ func (l *lightningFaucet) infoPage(w http.ResponseWriter, r *http.Request) {
 	// In order to render the info template we'll need the necessary
 	// context, so we'll grab that from the lnd daemon now in order to get
 	// the most up to date state.
-	homeInfo, err := l.fetchHomeState()
+	infoPage, err := l.fetchInfoState()
 	if err != nil {
 		log.Error("unable to fetch info state")
 		http.Error(w, "unable to render info page", http.StatusInternalServerError)
@@ -584,7 +574,7 @@ func (l *lightningFaucet) infoPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	infoTemplate.Execute(w, homeInfo)
+	infoTemplate.Execute(w, infoPage)
 }
 
 // toolsPage renders the tools page for the faucet. This includes the
@@ -598,10 +588,10 @@ func (l *lightningFaucet) toolsPage(w http.ResponseWriter, r *http.Request) {
 	// In order to render the tool template we'll need the necessary
 	// context, so we'll grab that from the lnd daemon now in order to get
 	// the most up to date state.
-	homeInfo, err := l.fetchHomeState()
+	toolsPage, err := l.fetchHomeState()
 	if err != nil {
-		log.Error("unable to fetch info state")
-		http.Error(w, "unable to render info page", http.StatusInternalServerError)
+		log.Error("unable to fetch tools state")
+		http.Error(w, "unable to render tools page", http.StatusInternalServerError)
 		return
 	}
 
@@ -609,7 +599,7 @@ func (l *lightningFaucet) toolsPage(w http.ResponseWriter, r *http.Request) {
 	// itself.
 	switch {
 	case r.Method == http.MethodGet:
-		toolsTemplate.Execute(w, homeInfo)
+		toolsTemplate.Execute(w, toolsPage)
 
 	// Otherwise, if the method is POST, then the user is submitting an action
 	case r.Method == http.MethodPost:
@@ -619,9 +609,9 @@ func (l *lightningFaucet) toolsPage(w http.ResponseWriter, r *http.Request) {
 			// action == 0 is to open channel, action == 1 is to generate, action == 2 is to pay
 			switch action {
 			case GenerateInvoiceAction:
-				l.generateInvoice(toolsTemplate, homeInfo, w, r)
+				l.generateInvoice(toolsTemplate, toolsPage, w, r)
 			case PayInvoiceAction:
-				l.payInvoice(toolsTemplate, homeInfo, w, r)
+				l.payInvoice(toolsTemplate, toolsPage, w, r)
 			}
 		}
 
@@ -688,7 +678,7 @@ func (l *lightningFaucet) connectedToNode(nodePub string) bool {
 // channel creation form, rendering errors to the form, and finally creating
 // channels if all the parameters check out.
 func (l *lightningFaucet) openChannel(homeTemplate *template.Template,
-	homeState *homePageContext, w http.ResponseWriter, r *http.Request) {
+	homeState *HomePageContext, w http.ResponseWriter, r *http.Request) {
 	// Before we can obtain the values the user entered in the form, we
 	// need to parse all parameters.  First attempt to establish a
 	// connection with the
@@ -862,7 +852,7 @@ func (l *lightningFaucet) CloseAllChannels() error {
 // generate invoice form, rendering errors to the form, and finally generating
 // invoice if all the parameters check out.
 func (l *lightningFaucet) generateInvoice(homeTemplate *template.Template,
-	homeState *homePageContext, w http.ResponseWriter, r *http.Request) {
+	homeState *HomePageContext, w http.ResponseWriter, r *http.Request) {
 
 	// Disable generate invoice if user set this parameter
 	if l.cfg.DisableGenerateInvoices {
@@ -945,7 +935,7 @@ func (l *lightningFaucet) generateInvoice(homeTemplate *template.Template,
 // pay invoice form, rendering errors to the form, and finally streaming the
 // payment if all the parameters check out.
 func (l *lightningFaucet) payInvoice(homeTemplate *template.Template,
-	homeState *homePageContext, w http.ResponseWriter, r *http.Request) {
+	homeState *HomePageContext, w http.ResponseWriter, r *http.Request) {
 
 	// Disable pay invoice if user set this parameter
 	if l.cfg.DisablePayInvoices {

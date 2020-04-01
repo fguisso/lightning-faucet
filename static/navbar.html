@@ -7,7 +7,7 @@
         <li class="nav-item">
             <a class="nav-link btn btn-light" href="/">Home</a>
         </li>
-        {{ if not (and .DisablePayInvoices .DisableGenerateInvoices) }}
+        {{ if not (and .GlobalContext.DisablePayInvoices .GlobalContext.DisableGenerateInvoices) }}
         <li class="nav-item">
             <a class="nav-link btn btn-dark" href="/tools">Tools</a>
         </li>
