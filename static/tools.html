@@ -82,17 +82,22 @@
         id="description" name="description" type="text" maxlength="255">
       </div>
 
-      {{ if .InvoicePaymentRequest}}
+      {{ if .PaymentRequest }}
         <div class="form-group" >
           <h4>Invoice successfully generated</h4>
           <div class="content p-4" style="word-break: break-all">
-            <p>{{ .InvoicePaymentRequest }}</p>
+            <p>{{ .PaymentRequest }}</p>
           </div>
         </div>
       {{ end }}
-
+    
       <div class="form-group row justify-content-center">
+        {{ if not .PaymentRequest }}
         <button class="btn btn-outline-primary btn-outline-primary--inverted d-lg-inline-block d-block mb-3 px-4" type="submit">Generate Invoice</button>
+        {{ end }}
+        {{ if .PaymentRequest }}
+        <a href="/invoices/{{ .PaymentHash }}" class="btn btn-outline-warning btn-outline-warning--inverted d-lg-inline-block d-block mb-3 px-4">Inspect invoice</a>
+        {{ end }}
       </div>
 
       <script>

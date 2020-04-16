@@ -1,0 +1,61 @@
+{{template "header" .}}
+
+{{template "navbar" .}}
+
+<div class="content mb-3 p-4">
+    <h2>Invoice state</h2>
+    <div id="waiting">
+        <div  class="spinner-border text-primary" role="status">
+            <span class="sr-only">Waiting...</span>
+        </div>
+        <p>Waiting for payment...</p>
+    </div>
+    <div class="form-group">
+        <label>PayHash: {{ .PaymentHash }}</label>
+        <span id="invoice-status" class="badge badge-pill badge-secondary">Open</span>
+        <div class="content p-4" style="word-break: break-all">
+            <p>{{ .PaymentRequest}}</p>
+        </div>
+        </br>
+        <a href="lightning:{{ .PaymentRequest }}" class="btn btn-outline-success btn-outline-success--inverted d-lg-inline-block d-block mb-3 px-4">Pay</a>
+        <button class="btn btn-outline-primary btn-outline-primary--inverted d-lg-inline-block d-block mb-3 px-4" data-clipboard-text="{{ .PaymentRequest }}">Click to copy</button>
+    </div>
+</div>
+
+<script type="text/javascript" src="../static/js/clipboard.min.js"></script>
+<script type="text/javascript">
+    new ClipboardJS('button');
+
+    let loc = window.location, new_uri;
+    if (loc.protocol === "https:") {
+        new_uri = "wss:";
+    } else {
+        new_uri = "ws:";
+    }
+    new_uri += "//" + loc.host + "/ws/{{ .PaymentHash }}";
+
+    const socket = new WebSocket(new_uri);
+    let status = document.getElementById('invoice-status');
+    let waiting = document.getElementById('waiting');
+    let infoBox = document.createElement('div');
+
+    socket.onopen = function(event) {
+        socket.onmessage = function(event) {
+            if (event.data == "settled") {
+                status.setAttribute('class', 'badge badge-pill badge-success');
+                status.innerText = 'Settled';
+                infoBox.setAttribute('class', 'alert alert-success');
+                infoBox.setAttribute('role', 'alert');
+                infoBox.innerText='Payment received!';
+                status.parentNode.insertBefore(infoBox, status.nextSibling);
+            } else {
+                infoBox.setAttribute('class', 'alert alert-danger');
+                infoBox.setAttribute('role', 'alert');
+                infoBox.innerText = event.data;
+                status.parentNode.insertBefore(infoBox, status.nextSibling);
+            };
+            waiting.parentNode.removeChild(waiting);
+        };
+    };
+</script>
+{{template "footer" .}}

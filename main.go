@@ -91,6 +91,10 @@ func main() {
 	// If users disable all actions, then disable the route
 	if !(cfg.DisableGenerateInvoices && cfg.DisablePayInvoices) {
 		r.HandleFunc("/tools", faucet.toolsPage).Methods("POST", "GET")
+		if !cfg.DisableGenerateInvoices {
+			r.HandleFunc("/invoices/{id}", faucet.invoicePage).Methods("GET")
+			r.HandleFunc("/ws/{id}", faucet.handleWebsocket)
+		}
 	}
 
 	// Next create a static file server which will dispatch our static

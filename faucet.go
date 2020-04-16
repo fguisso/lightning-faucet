@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -20,9 +22,11 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrutil/v2"
-	"github.com/decred/dcrd/wire"
 	"github.com/decred/dcrlnd/lnrpc"
+	"github.com/decred/dcrlnd/lnrpc/invoicesrpc"
 	"github.com/decred/dcrlnd/macaroons"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -41,6 +45,9 @@ var (
 	// and is protected by a mutex that must be held for reads/writes.
 	rateLimitMtx sync.RWMutex
 	requestIPs   map[string]time.Time
+
+	// Websocket hub
+	upgrader = websocket.Upgrader{}
 )
 
 // lightningFaucet is a Decred Channel Faucet. The faucet itself is a web app
@@ -52,12 +59,12 @@ var (
 // close channels based on their age as the faucet will only open up 100
 // channels total at any given time.
 type lightningFaucet struct {
-	lnd lnrpc.LightningClient
+	lnd            lnrpc.LightningClient
+	invoicesClient invoicesrpc.InvoicesClient
 
 	templates *template.Template
 
-	openChannels map[wire.OutPoint]time.Time
-	cfg          *config
+	cfg *config
 
 	globalContext *TemplateContext
 }
@@ -240,6 +247,7 @@ func newLightningFaucet(cfg *config,
 	// If we're able to connect out to the lnd node, then we can start up
 	// the faucet safely.
 	lnd := lnrpc.NewLightningClient(conn)
+	invoicesClient := invoicesrpc.NewInvoicesClient(conn)
 
 	// Get chain info to stop creation if the dcrlnd and dcrlnfaucet
 	// are set in different networks.
@@ -248,23 +256,12 @@ func newLightningFaucet(cfg *config,
 		return nil, fmt.Errorf("unable to get initial info: %v", err)
 	}
 
-	// chain, err := getChainInfo(lnd)
-	// if err != nil {
-	//		return nil, err
-	//	}
-	//	netParams := normalizeNetwork(activeNetParams.Name)
-	//	if chain.Network != netParams {
-	//		return nil, fmt.Errorf(
-	//			"dcrlnd and dcrlnfaucet are set in different "+
-	//				"networks <dcrlnd: %v / dcrlnfaucet: %v>",
-	//			chain.Network, netParams)
-	//	}
-
 	return &lightningFaucet{
-		lnd:           lnd,
-		templates:     templates,
-		cfg:           cfg,
-		globalContext: globalCtx,
+		lnd:            lnd,
+		invoicesClient: invoicesClient,
+		templates:      templates,
+		cfg:            cfg,
+		globalContext:  globalCtx,
 	}, nil
 }
 
@@ -422,7 +419,7 @@ func (l *lightningFaucet) closeChannel(chanPoint *lnrpc.ChannelPoint,
 	return chainhash.NewHash(closingHash)
 }
 
-// fetchHomeState is helper functions that populates the HomePageContext with
+// fetchHomeState is a helper function that populates the HomePageContext with
 // the latest state from the local lnd node.
 func (l *lightningFaucet) fetchHomeState() (*HomePageContext, error) {
 	// Get dcrlnd node info
@@ -517,6 +514,9 @@ func (l *lightningFaucet) fetchInfoState() (*InfoPageContext, error) {
 	// Get node info
 	infoReq := &lnrpc.GetInfoRequest{}
 	nodeInfo, err := l.lnd.GetInfo(ctxb, infoReq)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get initial info: %v", err)
+	}
 
 	// Get dcrlnd node info
 	globalCtx, err := fetchStaticInfo(l.lnd, l.cfg)
@@ -620,6 +620,156 @@ func (l *lightningFaucet) toolsPage(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "", http.StatusMethodNotAllowed)
 	}
+}
+
+// fetchInvoiceState is a helper function that populates the
+// InvoicePageContext withthe latest state from the
+// local dcrlnd node information.
+func (l *lightningFaucet) fetchInvoiceState(id string) (*HomePageContext, error) {
+	// Get dcrlnd node info
+	globalCtx, err := fetchStaticInfo(l.lnd, l.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get initial info: %v", err)
+	}
+
+	rhash, err := hex.DecodeString(id)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode payhas %v: %v",
+			id, err)
+	}
+
+	invoice, err := l.lnd.LookupInvoice(ctxb, &lnrpc.PaymentHash{
+		RHash: rhash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to get invoices info: payreq %v: %v",
+			rhash, err)
+	}
+
+	return &HomePageContext{
+		PaymentRequest: invoice.PaymentRequest,
+		PaymentHash:    hex.EncodeToString(invoice.RHash),
+		GlobalContext:  globalCtx,
+	}, nil
+}
+
+// invoicePage renders the invoice page based in their id.
+//
+// NOTE: This method implements the http.Handler interface.
+func (l *lightningFaucet) invoicePage(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	// First obtain the invoice template from our cache of pre-compiled
+	// templates.
+	invoiceTemplate := l.templates.Lookup("invoice.html")
+
+	// In order to render the invoice template we'll need the necessary
+	// context, so we'll grab that from the lnd daemon now in order to get
+	// the most up to date state.
+	invoiceState, err := l.fetchInvoiceState(id)
+	if err != nil {
+		log.Error("unable to fetch invoice page state")
+		http.Error(w, "unable to render invoice page", http.StatusInternalServerError)
+		return
+	}
+
+	// If the method is GET, then we'll render the home page with the form
+	// itself.
+	if r.Method == http.MethodGet {
+		invoiceTemplate.Execute(w, invoiceState)
+		return
+	}
+
+	// If the method isn't GET, then this is an error as we
+	// only support the GET method above.
+	http.Error(w, "", http.StatusMethodNotAllowed)
+}
+
+func (l *lightningFaucet) createUpdatesChans(ctx context.Context, id string) (
+	chan lnrpc.Invoice_InvoiceState, chan string, error) {
+
+	rhash, err := hex.DecodeString(id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Subscribe to receive updates from this invoice.
+	subInvoiceReq := &invoicesrpc.SubscribeSingleInvoiceRequest{
+		RHash: rhash,
+	}
+	updatesStream, err := l.invoicesClient.SubscribeSingleInvoice(
+		ctx, subInvoiceReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Create channels for streaming updates.
+	invoiceStateChan := make(chan lnrpc.Invoice_InvoiceState)
+	invoiceErrChan := make(chan string)
+
+	// Init a new routine to listen for updates
+	go func() {
+		for {
+			nextMsg, err := updatesStream.Recv()
+			if err != nil {
+				invoiceErrChan <- err.Error()
+				return
+			}
+			invoiceStateChan <- nextMsg.State
+		}
+	}()
+
+	return invoiceStateChan, invoiceErrChan, nil
+}
+
+func (l *lightningFaucet) handleWebsocket(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	invoiceStateChan, invoiceErrChan, err := l.createUpdatesChans(
+		r.Context(),
+		id,
+	)
+	if err != nil {
+		log.Errorf("create updateschan error: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	clientIP, err := getRealIP(r, l.cfg.UseRealIP)
+	if err != nil {
+		log.Errorf("Can't get client ip: %v", err)
+		clientIP = ""
+	}
+
+	log.Infof("Generate #%v updates channels for client: %v",
+		id, clientIP)
+
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Errorf("websocket upgrader error: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	for {
+		select {
+		case errMsg := <-invoiceErrChan:
+			err = c.WriteMessage(websocket.TextMessage, []byte(errMsg))
+			if err != nil {
+				log.Errorf("websocket error on write msg: %v", err)
+			}
+			return
+		case state := <-invoiceStateChan:
+			if state == 1 {
+				err = c.WriteMessage(websocket.TextMessage, []byte("settled"))
+				if err != nil {
+					log.Errorf("websocket error on write msg: %v", err)
+				}
+				return
+			}
+		}
+	}
+
 }
 
 func (l *lightningFaucet) pendingChannelExistsWithNode(nodePub string) bool {
@@ -848,6 +998,36 @@ func (l *lightningFaucet) CloseAllChannels() error {
 	return nil
 }
 
+// newInvoice generates a new ongoing invoice to store invoices data and create
+// a channel to receive updates from invoices status.
+func (l *lightningFaucet) newInvoice(amt int64, desc string) (
+	[]byte, string, error) {
+	ctx := context.Background()
+
+	// Generate an id for this invoice.
+	var idbytes [16]byte
+	_, err := rand.Read(idbytes[:])
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Create the invoice request.
+	invoiceReq := &lnrpc.Invoice{
+		CreationDate: time.Now().Unix(),
+		Value:        amt,
+		Memo:         desc,
+	}
+	// Send the invoice request to the dcrlnd.
+	invoice, err := l.lnd.AddInvoice(ctx, invoiceReq)
+	if err != nil {
+		return nil, "", err
+	}
+
+	log.Infof("Generated invoice #%d for %s rhash=%064x", invoice.AddIndex,
+		dcrutil.Amount(amt), invoice.RHash)
+	return invoice.RHash, invoice.PaymentRequest, nil
+}
+
 // generateInvoice is a hybrid http.Handler that handles: the validation of the
 // generate invoice form, rendering errors to the form, and finally generating
 // invoice if all the parameters check out.
@@ -903,12 +1083,7 @@ func (l *lightningFaucet) generateInvoice(homeTemplate *template.Template,
 	}
 	amtAtoms := int64(amtDcr * 1e8)
 
-	invoiceReq := &lnrpc.Invoice{
-		CreationDate: time.Now().Unix(),
-		Value:        amtAtoms,
-		Memo:         description,
-	}
-	invoice, err := l.lnd.AddInvoice(ctxb, invoiceReq)
+	rhash, payreq, err := l.newInvoice(amtAtoms, description)
 	if err != nil {
 		log.Errorf("Generate invoice failed: %v", err)
 		homeState.SubmissionError = ErrorGeneratingInvoice
@@ -916,10 +1091,8 @@ func (l *lightningFaucet) generateInvoice(homeTemplate *template.Template,
 		return
 	}
 
-	log.Infof("Generated invoice #%d for %s rhash=%064x", invoice.AddIndex,
-		dcrutil.Amount(amtAtoms), invoice.RHash)
-
-	homeState.InvoicePaymentRequest = invoice.PaymentRequest
+	homeState.PaymentRequest = payreq
+	homeState.PaymentHash = hex.EncodeToString(rhash)
 
 	if err := homeTemplate.Execute(w, homeState); err != nil {
 		log.Errorf("unable to render home page: %v", err)
