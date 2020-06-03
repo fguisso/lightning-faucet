@@ -33,3 +33,5 @@ vendor/
 debug
 .vscode
 main
+
+internal/static/blob.go

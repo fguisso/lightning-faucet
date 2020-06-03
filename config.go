@@ -56,6 +56,8 @@ type config struct {
 	TLSCertPath      string        `long:"tlscertpath" description:"Path to write the TLS certificate for lnd's RPC and REST services"`
 	ActionsTimeLimit time.Duration `long:"actions_timelimit" description:"Time to wait before a second request can be made by a single faucet client."`
 	UseRealIP        bool          `long:"userealip" description:"Use the RealIP middleware to get the client's real IP from the X-Real-IP or X-Forwarded-For headers, in that order."`
+	TemplatesDir     string        `long:"templates" description:"Use local templates instead of binary generated files"`
+	StaticDir        string        `long:"static" description:"Use local static files instead of binary generated files"`
 
 	DisableZombieSweeper bool `long:"disable_zombie_sweeper" description:"disable zombie channels sweeper"`
 
