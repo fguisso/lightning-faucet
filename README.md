@@ -27,10 +27,10 @@ required:
 
 * **Go:** Installation instructions can be found [here](https://golang.org/doc/install).
 
-Minimum Go version supported is 1.11. This project uses go modules, so either
+Minimum Go version supported is 1.14. This project uses go modules, so either
 compile it with GO111MODULES=on or outside of the $GOPATH.
 
-With the preliminary steps completed, to install the Testnet Lightning Faucet
+With the preliminary steps completed, to install the Lightning Faucet
 
 ```no-highlight
 $ git clone https://github.com/decred/lightning-faucet src/github.com/decred/lightning-faucet
@@ -57,4 +57,12 @@ a few additional options:
 
 ```no-highlight
 lightning-faucet --lnd_node=X.X.X.X:10009 --use_le_https --domain my-faucet-domain.example.com
+```
+
+## Templates and static files development
+
+All static files and templates are packaged in the final binary, if you have change something,
+don't forget to run the generator:
+```
+go generator ./...
 ```

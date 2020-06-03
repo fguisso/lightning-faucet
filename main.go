@@ -1,16 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"html/template"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"reflect"
 	"time"
 
+	"github.com/decred/lightning-faucet/internal/static"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -23,23 +25,9 @@ func equal(x, y interface{}) bool {
 }
 
 var (
-	// templateGlobPattern is the pattern than matches all the HTML
-	// templates in the static directory
-	templateGlobPattern = filepath.Join(staticDirName, "*.html")
-
-	// customFuncs is a registry of custom functions we use from within the
-	// templates.
-	customFuncs = template.FuncMap{
-		"equal": equal,
-	}
-
 	// ctxb is a global context with no timeouts that's used within the
 	// gRPC requests to lnd.
 	ctxb = context.Background()
-)
-
-const (
-	staticDirName = "static"
 )
 
 func main() {
@@ -52,9 +40,14 @@ func main() {
 
 	// Pre-compile the list of templates so we'll catch any errors in the
 	// templates as soon as the binary is run.
-	faucetTemplates := template.Must(template.New("faucet").
-		Funcs(customFuncs).
-		ParseGlob(templateGlobPattern))
+	faucetTemplates := template.Must(template.New("faucet").Parse(""))
+	for filename, content := range static.Templates() {
+		_, err := faucetTemplates.New(filename).
+			Parse(string(content))
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
 
 	// With the templates loaded, create the faucet itself.
 	faucet, err := newLightningFaucet(cfg, faucetTemplates)
@@ -94,12 +87,14 @@ func main() {
 	}
 
 	// Next create a static file server which will dispatch our static
-	// files. We rap the file sever http.Handler is a handler that strips
-	// out the absolute file path since it'll dispatch based on solely the
-	// file name.
-	staticFileServer := http.FileServer(http.Dir(staticDirName))
-	staticHandler := http.StripPrefix("/static/", staticFileServer)
-	r.PathPrefix("/static/").Handler(staticHandler)
+	// files load in the static pkg.
+	for filename, content := range static.Assets() {
+		r.HandleFunc(fmt.Sprintf("/static%v", filename),
+			func(w http.ResponseWriter, r *http.Request) {
+				http.ServeContent(w, r, "test.txt", time.Now(),
+					bytes.NewReader(content))
+			})
+	}
 
 	// With all of our paths registered we'll register our mux as part of
 	// the global http handler.

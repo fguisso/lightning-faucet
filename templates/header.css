@@ -1,0 +1,19 @@
+{{define "header"}}
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+    <link type="text/css" rel="stylesheet" href="/static/css/lib/bootstrap.4.3.1.min.css">
+    <link type="text/css" rel="stylesheet" href="/static/css/fonts.css">
+    <link type="text/css" rel="stylesheet" href="/static/css/lightning.css">
+
+    <script type="text/javascript" src="/static/js/lib/jquery-2.1.1.min.js"></script>
+    <script type="text/javascript" src="/static/js/lib/bootstrap.4.3.1.min.js"></script>
+    
+    <title>Decred - Lightning Network Faucet</title>
+  </head>
+
+  <body>
+{{end}}

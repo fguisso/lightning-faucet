@@ -23,6 +23,7 @@ import (
 	"github.com/decred/dcrd/wire"
 	"github.com/decred/dcrlnd/lnrpc"
 	"github.com/decred/dcrlnd/macaroons"
+	//"github.com/decred/lightning-faucet/internal/static"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -539,7 +540,7 @@ func (l *lightningFaucet) fetchHomeState() (*homePageContext, error) {
 func (l *lightningFaucet) faucetHome(w http.ResponseWriter, r *http.Request) {
 	// First obtain the home template from our cache of pre-compiled
 	// templates.
-	homeTemplate := l.templates.Lookup("index.html")
+	homeTemplate := l.templates.Lookup("/index.html")
 
 	// In order to render the home template we'll need the necessary
 	// context, so we'll grab that from the lnd daemon now in order to get
@@ -579,7 +580,7 @@ func (l *lightningFaucet) faucetHome(w http.ResponseWriter, r *http.Request) {
 // NOTE: This method implements the http.Handler interface.
 func (l *lightningFaucet) infoPage(w http.ResponseWriter, r *http.Request) {
 	// get info template from our cache of pre-compiled templates.
-	infoTemplate := l.templates.Lookup("info.html")
+	infoTemplate := l.templates.Lookup("/info.html")
 
 	// In order to render the info template we'll need the necessary
 	// context, so we'll grab that from the lnd daemon now in order to get
@@ -607,7 +608,7 @@ func (l *lightningFaucet) infoPage(w http.ResponseWriter, r *http.Request) {
 // NOTE: This method implements the http.Handler interface.
 func (l *lightningFaucet) toolsPage(w http.ResponseWriter, r *http.Request) {
 	// get tool template from our cache of pre-compiled templates.
-	toolsTemplate := l.templates.Lookup("tools.html")
+	toolsTemplate := l.templates.Lookup("/tools.html")
 
 	// In order to render the tool template we'll need the necessary
 	// context, so we'll grab that from the lnd daemon now in order to get
